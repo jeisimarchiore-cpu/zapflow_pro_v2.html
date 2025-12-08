@@ -45,7 +45,7 @@
         const { useState, useEffect, useMemo, useRef } = React;
 
         // --- CONFIGURAÇÃO DA EVOLUTION API (ATUALIZADO) ---
-        // ATUALIZE A URL ABAIXO PARA O SEU ENDEREÇO PÚBLICO COM HTTPS
+        // 🚨 IMPORTANTE: SUBSTITUA ESTA URL PELA SUA URL REAL DA EVOLUTION API HOSPEDADA COM HTTPS!
         const API_URL = "https://api.disparadorpro.com"; 
         const API_KEY = "BQYHJGJHJ";             // <--- SUA CHAVE DO ARQUIVO .ENV
         const INSTANCE_NAME = "disparador_pro";  // Nome da sessão
@@ -86,7 +86,6 @@
 
             const checkConnection = async () => {
                 try {
-                    // USO DA NOVA API_URL
                     const response = await fetch(`${API_URL}/instance/connectionState/${INSTANCE_NAME}`, {
                         method: 'GET',
                         headers: { 'apikey': API_KEY }
@@ -142,7 +141,7 @@
                     let cleanPhone = contact.phone.replace(/\D/g, '');
 
                     try {
-                        // 3. Enviar Requisição para a API (USO DA NOVA API_URL)
+                        // 3. Enviar Requisição para a API
                         const response = await fetch(`${API_URL}/message/sendText/${INSTANCE_NAME}`, {
                             method: 'POST',
                             headers: {
@@ -317,6 +316,7 @@
 
                 } catch (error) {
                     console.error(error);
+                    // Mensagem de erro atualizada para produção
                     setErrorMsg("Erro ao conectar com a API. Verifique se o servidor da API está rodando e acessível.");
                 } finally {
                     setIsLoading(false);

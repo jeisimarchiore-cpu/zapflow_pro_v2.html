@@ -424,7 +424,7 @@
                              </div>
                             <select
                                 value={targetListId || ''}
-                                onChange={(e) => setTargetListId(parseInt(e.target.value))}
+                                onChange={(e) => setTargetListId(e.target.value)} 
                                 className="border border-gray-300 rounded-lg p-2 focus:ring-2 focus:ring-blue-500 outline-none text-sm bg-white w-1/2"
                             >
                                 {contactLists.map(list => (
@@ -641,7 +641,7 @@
                              </div>
                             <select
                                 value={targetListId || ''}
-                                onChange={(e) => setTargetListId(parseInt(e.target.value))}
+                                onChange={(e) => setTargetListId(e.target.value)} // Corrigido para não usar parseInt
                                 className="border border-gray-300 rounded-lg p-2 focus:ring-2 focus:ring-blue-500 outline-none text-sm bg-white w-1/3"
                             >
                                 {contactLists.map(list => (
@@ -701,6 +701,7 @@
             const [modalContent, setModalContent] = useState({ title: '', message: '' });
             const [selectedContactDetail, setSelectedContactDetail] = useState(null);
             const [selectedListToManage, setSelectedListToManage] = useState(null); 
+            const [isCreateListModalOpen, setIsCreateListModalOpen] = useState(false); // NOVO: Estado para abrir modal de criação
             
             // Estados para o fluxo de importação
             const [stagedContacts, setStagedContacts] = useState([]);
@@ -716,6 +717,12 @@
             const [isSending, setIsSending] = useState(false);
             const [sendingProgress, setSendingProgress] = useState({ total: 0, sent: 0, failed: 0, logs: [] });
             
+            // NOVOS ESTADOS PARA CONTROLE DE SAÚDE
+            const [dailyLimit, setDailyLimit] = useState(1500); 
+            const [todaySent, setTodaySent] = useState(350); 
+            const [isBlocked, setIsBlocked] = useState(false); 
+            const [isSuspended, setIsSuspended] = useState(false); 
+
             // Estado de Chat (Espelhamento) - Mock inicial e mensagens
             const initialChats = [
                 { id: 1, name: 'João Silva', lastMsg: 'Obrigado!', time: '10:30', unread: 2, number: '5511999998888' },
@@ -840,6 +847,36 @@
                 setSelectedListToManage(list);
             };
             
+            // NOVO: Lógica de criação de Lista
+            const handleCreateNewList = async (listName) => {
+                if (!isAuthReady || !auth?.currentUser?.uid || !db || !window.setDoc) {
+                    showModal("Erro", "O sistema de autenticação não está pronto.");
+                    return;
+                }
+                if (listName.trim() === "") {
+                    showModal("Erro", "O nome da lista não pode ser vazio.");
+                    return;
+                }
+
+                const userId = auth.currentUser.uid;
+                const newId = `list-${Date.now()}`;
+                const listRef = doc(db, `artifacts/${appId}/users/${userId}/contactLists`, newId);
+
+                try {
+                    await window.setDoc(listRef, { 
+                        id: newId,
+                        name: listName, 
+                        contactIds: [],
+                        createdAt: new Date().toISOString()
+                    });
+                    showModal("Sucesso", `Lista "${listName}" criada e salva no Firestore!`);
+                    setIsCreateListModalOpen(false);
+                } catch (e) {
+                    console.error("Erro ao criar lista:", e);
+                    showModal("Erro de Persistência", "Falha ao criar lista. Verifique as permissões.");
+                }
+            };
+            
             // Validação simulada
             const isPhoneNumberValid = (number) => {
                 const cleaned = number ? number.toString().replace(/\D/g, '') : '';
@@ -929,6 +966,7 @@
                         const contactRef = doc(db, `artifacts/${appId}/users/${userId}/contacts`, newId);
                         
                         batch.set(contactRef, {
+                            id: newId, // Garante que o ID do documento seja salvo no objeto
                             name: staged.name,
                             number: staged.number,
                             status: 'Ativo',
@@ -942,14 +980,16 @@
                 });
 
                 if (validCount > 0 && targetListId) {
-                    const listRef = doc(db, `artifacts/${appId}/users/${userId}/contactLists`, targetListId.toString());
-                    const currentList = contactLists.find(l => l.id === targetListId);
+                    // targetListId é uma string ou null. Precisamos ter certeza que é string para o doc.
+                    const listIdStr = targetListId.toString(); 
+                    const listRef = doc(db, `artifacts/${appId}/users/${userId}/contactLists`, listIdStr);
+                    const currentList = contactLists.find(l => l.id == targetListId); // Usando == para comparar number com string
                     
                     if (currentList) {
                         const updatedContactIds = [...new Set([...currentList.contactIds, ...newContactIds])];
                          batch.update(listRef, { contactIds: updatedContactIds });
                     } else {
-                        batch.set(listRef, { name: "Lista Importada", contactIds: newContactIds });
+                        batch.set(listRef, { id: listIdStr, name: "Lista Importada (Fallback)", contactIds: newContactIds });
                     }
 
                     try {
@@ -972,24 +1012,173 @@
             };
             
             const startCampaign = async () => { /* Mantida */ };
-            const calculateHealth = () => { return 85; };
+            
+            // LÓGICA DE CÁLCULO DE SAÚDE APRIMORADA
+            const calculateHealth = () => { 
+                if (isBlocked || isSuspended) return 0;
+
+                const totalSent = contacts.reduce((acc, c) => acc + (c.sentYear || 0), 0);
+                const totalBlocks = contacts.reduce((acc, c) => acc + (c.blockedCount || 0), 0);
+                
+                let score = 100;
+                
+                // Penalidade por volume alto (Aquecimento)
+                if (todaySent > dailyLimit * 0.9) score -= 15; // Quase atingindo o limite
+                if (todaySent > dailyLimit * 1.05) score -= 30; // Excedeu o limite
+
+                // Penalidade por bloqueios
+                if (totalBlocks > 0) score -= (totalBlocks * 10);
+                
+                return Math.max(0, score);
+            };
             const healthScore = calculateHealth();
 
             // Detalhes do Cartão
-            const openMetricDetail = (metricType) => { /* Mantida */ };
-            
-            // Carregamento/Loading Screen
-            if (!isAuthReady) {
-                 return (
-                    <div className="flex items-center justify-center h-screen bg-gray-100">
-                        <div className="text-center p-8 bg-white rounded-xl shadow-lg">
-                            <span className="animate-spin inline-block w-8 h-8 border-4 border-t-4 border-blue-500 border-opacity-25 border-t-blue-500 rounded-full mb-3"></span>
-                            <h2 className="text-xl font-medium text-gray-700">Carregando Dados e Autenticação...</h2>
-                            <p className="text-sm text-gray-500 mt-1">Aguarde a conexão com o Firestore.</p>
+            const openMetricDetail = (metricType) => { 
+                let title = "";
+                let content = null;
+                const totalSent = contacts.reduce((acc, c) => acc + (c.sentYear || 0), 0);
+                const totalBlocked = contacts.reduce((acc, c) => acc + (c.blockedCount || 0), 0);
+                const totalReplied = contacts.filter(c => c.lastSentReplied).length;
+
+                switch(metricType) {
+                    case 'contacts':
+                        title = "Detalhes dos Contatos Únicos";
+                        content = (
+                            <div className="space-y-3">
+                                <p><strong>Total na Base Mestra:</strong> <span className="text-xl font-bold text-blue-600">{contacts.length}</span></p>
+                                <p><strong>Contatos Únicos:</strong> <span className="text-xl font-bold text-blue-600">{getUniqueContactCount()}</span></p>
+                                <p className="text-xs text-gray-500">Isso representa o número de telefones não duplicados cadastrados em todas as listas.</p>
+                                <div className="p-2 bg-gray-100 rounded-lg text-xs">
+                                    <p>Listas ativas: {contactLists.length}</p>
+                                    <p>O número de contatos únicos deve crescer de forma orgânica.</p>
+                                </div>
+                            </div>
+                        );
+                        break;
+                    case 'sends':
+                        title = "Performance de Disparos";
+                        content = (
+                             <div className="space-y-3">
+                                <p><strong>Disparos na Semana:</strong> <span className="text-xl font-bold text-emerald-600">{contacts.reduce((acc, c) => acc + (c.sentWeek || 0), 0)}</span></p>
+                                <p><strong>Total Geral (Ano):</strong> <span className="text-xl font-bold text-emerald-600">{totalSent}</span></p>
+                                <p className="text-xs text-gray-500">Média diária: {Math.round(contacts.reduce((acc, c) => acc + (c.sentWeek || 0), 0) / 7)} envios.</p>
+                                <p className="mt-2 text-sm font-semibold">Dica: Mantenha o volume consistente para aquecer o número.</p>
+                            </div>
+                        );
+                        break;
+                    case 'health':
+                        title = "Saúde e Aquecimento do Número";
+                        content = (
+                            <div className="space-y-3">
+                                {isBlocked && <div className="p-2 bg-red-100 text-red-800 font-bold rounded-lg"><Icon name="lock" size={16} className="inline-block mr-1"/> BLOQUEIO CRÍTICO! Ações suspensas.</div>}
+                                {isSuspended && <div className="p-2 bg-orange-100 text-orange-800 font-bold rounded-lg"><Icon name="alert-triangle" size={16} className="inline-block mr-1"/> SUSPENSÃO TEMPORÁRIA!</div>}
+
+                                <p><strong>Score Atual:</strong> <span className={`text-xl font-bold ${healthScore > 80 ? 'text-green-600' : 'text-red-600'}`}>{healthScore}%</span></p>
+                                
+                                <div className="border-t pt-2 mt-2">
+                                    <p className="text-sm font-medium">Uso Diário (Aquecimento):</p>
+                                    <p>Enviados Hoje: <span className="font-bold">{todaySent}</span> / {dailyLimit} mensagens</p>
+                                    <p className="text-xs text-gray-500">
+                                        Status: {todaySent < dailyLimit * 0.8 ? 'Seguro' : 'Alto Volume'}
+                                    </p>
+                                </div>
+
+                                <p className="text-xs text-gray-500">Bloqueios Reportados: {totalBlocked}</p>
+                            </div>
+                        );
+                        break;
+                    case 'response':
+                        title = "Análise de Retorno (Respostas)";
+                        content = (
+                            <div className="space-y-3">
+                                <p><strong>Taxa de Resposta:</strong> <span className="text-xl font-bold text-purple-600">4.2%</span></p>
+                                <p><strong>Contatos que Responderam:</strong> <span className="text-xl font-bold text-purple-600">{totalReplied}</span></p>
+                                <p className="text-xs text-gray-500">Esta taxa indica a efetividade da sua mensagem.</p>
+                                <p className="mt-2 text-sm font-semibold">Estratégia: Use personalização e CTAs claros para aumentar a taxa.</p>
+                            </div>
+                        );
+                        break;
+                    default:
+                        title = "Métrica Desconhecida";
+                        content = "Nenhuma informação detalhada disponível.";
+                }
+
+                showModal(title, content);
+            };
+
+            // NOVO: Componente para o Alerta de Saúde no Header
+            const HealthWarningBanner = () => {
+                if (!isConnected || (!isBlocked && !isSuspended)) return null;
+
+                const message = isBlocked 
+                    ? "⚠️ BLOQUEIO CRÍTICO! Ações de envio SUSPENSAS. Verifique a Conexão."
+                    : isSuspended
+                    ? "⚠️ SUSPENSÃO TEMPORÁRIA DETECTADA. Reduza o volume."
+                    : null;
+                
+                if (!message) return null;
+
+                const bgColor = isBlocked ? 'bg-red-600' : 'bg-orange-500';
+                
+                return (
+                    <div className={`${bgColor} text-white text-xs font-bold p-2 text-center flex items-center justify-center gap-2`}
+                         onClick={() => setActiveTab('connect')}
+                         title="Clique para ver detalhes"
+                    >
+                        <Icon name="zap-off" size={16}/>
+                        {message}
+                    </div>
+                );
+            };
+
+            // Componente Modal de Criação de Lista
+            const CreateListModal = ({ isOpen, onClose, onCreate }) => {
+                const [newListName, setNewListName] = useState('');
+
+                if (!isOpen) return null;
+
+                const handleCreate = () => {
+                    onCreate(newListName);
+                    setNewListName('');
+                };
+
+                return (
+                    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+                        <div className="bg-white p-8 rounded-2xl shadow-2xl w-full max-w-sm transform transition-all">
+                            <h3 className="text-xl font-bold mb-4 text-gray-800 flex items-center gap-2">
+                                <Icon name="list-plus" size={24} className="text-blue-600"/> Criar Nova Lista
+                            </h3>
+                            
+                            <label className="block text-sm font-medium text-gray-700 mb-1">Nome da Nova Lista</label>
+                            <input
+                                type="text"
+                                value={newListName}
+                                onChange={(e) => setNewListName(e.target.value)}
+                                onKeyPress={(e) => { if (e.key === 'Enter') handleCreate(); }}
+                                placeholder="Ex: Clientes VIP, Leads Frios"
+                                className="w-full border border-gray-300 rounded-lg p-2 focus:ring-2 focus:ring-blue-500 outline-none mb-6"
+                            />
+
+                            <div className="flex justify-between gap-3">
+                                <button
+                                    onClick={onClose}
+                                    className="px-4 py-2 rounded-full font-medium text-gray-600 transition border border-gray-300 hover:bg-gray-100 flex-1"
+                                >
+                                    Cancelar
+                                </button>
+                                <button
+                                    onClick={handleCreate}
+                                    disabled={newListName.trim().length === 0}
+                                    className={`px-4 py-2 rounded-full font-bold text-white transition shadow-lg flex-1 ${newListName.trim().length === 0 ? 'bg-gray-400' : 'bg-blue-600 hover:bg-blue-700'}`}
+                                >
+                                    Criar Lista
+                                </button>
+                            </div>
                         </div>
                     </div>
-                 );
-            }
+                );
+            };
 
 
             // --- COMPONENTES DE TELA - REWORKED ---
@@ -1136,14 +1325,34 @@
                                 <span className="font-bold">Número Conectado:</span> +55 (11) 99999-9999<br/>
                                 <span className="font-bold">Status da API:</span> <span className="text-green-500 font-bold">Online</span>
                             </p>
+                            
+                            {/* NOVO: CONTROLES DE SAÚDE SIMULADOS */}
+                            <div className="mt-6 p-4 bg-yellow-50 rounded-xl border border-yellow-200">
+                                <p className="font-bold text-yellow-800 mb-2">Controle de Saúde do Número:</p>
+                                <div className="flex justify-center gap-4">
+                                    <button 
+                                        onClick={() => setIsBlocked(prev => !prev)}
+                                        className={`px-4 py-1 text-sm rounded-full font-medium transition ${isBlocked ? 'bg-red-500 text-white' : 'bg-red-200 text-red-700 hover:bg-red-300'}`}
+                                    >
+                                        {isBlocked ? '✅ Bloqueado' : 'Simular Bloqueio'}
+                                    </button>
+                                    <button 
+                                        onClick={() => setIsSuspended(prev => !prev)}
+                                        className={`px-4 py-1 text-sm rounded-full font-medium transition ${isSuspended ? 'bg-orange-500 text-white' : 'bg-orange-200 text-orange-700 hover:bg-orange-300'}`}
+                                    >
+                                        {isSuspended ? '✅ Suspenso' : 'Simular Suspensão'}
+                                    </button>
+                                </div>
+                            </div>
+
                             <button 
                                 onClick={() => {
                                     setConnectionStep(0);
                                     setIsConnected(false);
                                 }}
-                                className="text-red-500 text-sm hover:text-red-700 font-medium transition flex items-center mx-auto gap-1"
+                                className="text-red-500 text-sm hover:text-red-700 font-medium transition flex items-center mx-auto gap-1 mt-6"
                             >
-                                <Icon name="power" size={16}/> Desconectar Dispositivo
+                                <Icon name="power" size={16}/> Desconectar Dispositivo (Mantém Histórico)
                             </button>
                         </div>
                     )}
@@ -1153,7 +1362,7 @@
             // 3. CAMPANHA E DISPARO (REWORKED - FLUXO DE 3 ETAPAS)
             const Campaign = () => { /* Código da Campanha Mantido */ 
                 const targetContacts = getContactsByList(selectedListId);
-                const currentListName = contactLists.find(l => l.id === selectedListId)?.name || 'Lista Não Selecionada';
+                const currentListName = contactLists.find(l => l.id == selectedListId)?.name || 'Lista Não Selecionada';
                 const totalContactsInList = targetContacts.length;
 
                 const getPreviewText = () => {
@@ -1196,7 +1405,7 @@
                         <label className="block text-sm font-medium text-gray-700 mb-2">Lista de Disparo</label>
                         <select
                             value={selectedListId || ''}
-                            onChange={(e) => setSelectedListId(parseInt(e.target.value))}
+                            onChange={(e) => setSelectedListId(e.target.value)}
                             className="w-full border border-gray-300 rounded-xl p-3 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none text-base bg-white shadow-sm"
                         >
                             {contactLists.map(list => (
@@ -1396,7 +1605,7 @@
                             <h4 className="font-bold text-gray-800 text-xl">Grupos de Disparo ({contactLists.length})</h4>
                              <button 
                                 className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-2 rounded-full text-sm font-medium transition flex items-center gap-2 shadow-md"
-                                onClick={() => showModal("Criar Lista", "Funcionalidade de criação de lista ativada. Um formulário completo seria usado aqui.")}
+                                onClick={() => setIsCreateListModalOpen(true)} // NOVO: Abre o modal de criação
                              >
                                 <Icon name="list-plus" size={16}/> Nova Lista
                             </button>
@@ -1426,7 +1635,7 @@
                                                 setSelectedListId(list.id);
                                                 showModal("Lista Ativa", `A lista '${list.name}' agora é a lista de disparo ATIVA.`);
                                             }}
-                                            className={`p-1.5 rounded-full ${list.id === selectedListId ? 'text-emerald-500' : 'text-gray-400 hover:bg-gray-200'}`}
+                                            className={`p-1.5 rounded-full ${list.id == selectedListId ? 'text-emerald-500' : 'text-gray-400 hover:bg-gray-200'}`}
                                         >
                                             <Icon name="check" size={18}/>
                                         </button>
@@ -1503,6 +1712,7 @@
                                 <div className="p-10 text-center text-gray-400">
                                     <Icon name="list-x" size={32} className="mx-auto mb-3"/>
                                     <p>Nenhum contato na base. Importe um CSV para começar.</p>
+                                
                                 </div>
                             )}
                         </div>
@@ -1654,6 +1864,13 @@
                         onListDelete={(deletedId) => setContactLists(prev => prev.filter(l => l.id !== deletedId))}
                     />
 
+                    {/* MODAL DE CRIAÇÃO DE LISTA */}
+                    <CreateListModal
+                        isOpen={isCreateListModalOpen}
+                        onClose={() => setIsCreateListModalOpen(false)}
+                        onCreate={handleCreateNewList}
+                    />
+
                     {/* MODAL DE PRÉ-VISUALIZAÇÃO DE IMPORTAÇÃO (NOVO) */}
                     {isImportModalOpen && (
                         <ImportPreviewModal
@@ -1674,6 +1891,9 @@
                             onConfirmImport={handleConfirmImport}
                         />
                     )}
+
+                    {/* NOVO: BANNER DE AVISO DE SAÚDE CRÍTICO */}
+                    <HealthWarningBanner />
 
 
                     {/* Header Principal (Navegação Horizontal) */}
@@ -1745,4 +1965,3 @@
     </script>
 </body>
 </html>
-
